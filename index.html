@@ -1,0 +1,35 @@
+<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Paradise Tunes V7 — Isolated Analyzer Decision Test</title>
+<style>
+:root{color-scheme:dark}*{box-sizing:border-box}body{background:#071624;color:#eef5fc;font:16px system-ui,sans-serif;margin:0;padding:24px}main{max-width:1100px;margin:auto}h1{font-size:1.7rem}p,.sub{color:#bad1e4;line-height:1.5}h2{font-size:1.1rem}.pill{border-radius:100px;background:#164338;color:#91f4c9;padding:5px 12px;font-weight:600;display:inline-block}.note{padding:14px;border:1px solid #37536a;border-radius:10px;background:#11283b;margin:16px 0}.panels{display:grid;grid-template-columns:1fr 1fr;gap:15px}.panel{background:#132c40;border:1px solid #31526c;padding:14px;border-radius:10px}.bars{display:flex;align-items:end;gap:3px;height:220px;background:#0b2031;padding:8px;border-radius:7px}.bar{flex:1;min-width:0;height:0;background:linear-gradient(to bottom,#ea554e,#ffca50,#26c86e);border-radius:3px 3px 0 0;transition:height 65ms linear}pre{font-size:13px;line-height:1.65;white-space:pre-wrap;overflow-wrap:anywhere}button{padding:11px 15px;margin:5px 8px 8px 0;border:1px solid #6387a1;background:#21435c;color:white;border-radius:7px;cursor:pointer}button.active{background:#208663;border-color:#4edfaa}button:focus-visible{outline:3px solid white}footer{color:#aac4d7} @media(max-width:700px){body{padding:12px}.panels{grid-template-columns:1fr}.bars{height:170px}}
+</style><main><h1>Paradise Tunes — V7 isolated analyzer experiment</h1>
+<p><span class="pill">SEPARATE TEST SERVER ONLY</span> No changes to the production website or V1 Render analyzer. Each display below is driven by real PCM FFT data, not an animated simulation. This analyzer uses its own stream connection.</p>
+<div class="note"><b>What this proves:</b> whether the <em>new isolated analyzer</em> produces fresh FFT frames promptly and whether less smoothing helps response. <b>What it cannot prove:</b> synchronization with the listener's independently buffered iPhone audio.</div>
+<button class="active" id="fast">Fast/raw display</button><button id="smoothed">Smoothed display</button><button id="copy">Copy diagnostics</button>
+<div class="panels"><section class="panel"><h2>Raw FFT measurements</h2><div class="bars" id="raw"></div><p id="rawstat">Waiting for data…</p></section><section class="panel"><h2>Server-smoothed FFT measurements</h2><div class="bars" id="smooth"></div><p id="smoothstat">Waiting for data…</p></section></div>
+<div class="panels" style="margin-top:16px"><section class="panel"><h2>Analyzer itself</h2><pre id="server">Connecting…</pre></section><section class="panel"><h2>Browser delivery</h2><pre id="client">Connecting…</pre></section></div>
+<p><b>Test instructions:</b> Wait about 35 seconds. Watch both panels, note the raw-versus-smoothed difference, and capture a screenshot. Then compare with the previously saved V6 test separately. Don't assume two cloud connections hear exactly the same part of the song.</p>
+<footer>Decision checkpoint: If genuine FFT frames are fast but bars still feel delayed or out-of-sync with iPhone audio, stop investing in independent-stream cloud synchronization. This experiment is not a solution to differing playback buffer delays.</footer>
+<script>
+const $=s=>document.querySelector(s);
+const build=id=>Array.from({length:24},()=>{const bar=document.createElement('div');bar.className='bar';$(id).append(bar);return bar});
+const raw=build('#raw'),smooth=build('#smooth');let active='raw';
+$('#fast').onclick=()=>{active='raw';$('#fast').classList.add('active');$('#smoothed').classList.remove('active')};
+$('#smoothed').onclick=()=>{active='smooth';$('#smoothed').classList.add('active');$('#fast').classList.remove('active')};
+let count=0,changed=0,dupes=0,fail=0,lastSeq=null,skipped=0,first=performance.now(),recent=[],lastReply=0,serverData=null,lastError='none';
+let busy=false;
+async function poll(){if(busy)return;busy=true;const t=performance.now();try{
+ const res=await fetch('/api/vu?nonce='+Math.random(),{cache:'no-store'});if(!res.ok)throw Error('HTTP '+res.status);
+ const d=await res.json();const end=performance.now();count++;recent.push(end-t);if(recent.length>50)recent.shift();
+ if(lastSeq!==null){if(d.seq===lastSeq)dupes++;else if(d.seq>lastSeq){changed++;skipped+=Math.max(0,d.seq-lastSeq-1);}else lastError='Sequence reset (server restarted)';}
+ lastSeq=d.seq;lastReply=end;serverData=d;
+ raw.forEach((b,i)=>b.style.height=(d.live?d.raw_bands[i]:0)+'%');smooth.forEach((b,i)=>b.style.height=(d.live?d.bands[i]:0)+'%');
+ $('#rawstat').textContent=d.live?'LIVE · peak '+Math.max(...d.raw_bands):'Not live: '+d.status;
+ $('#smoothstat').textContent=d.live?'LIVE · peak '+Math.max(...d.bands):'Not live: '+d.status;
+ $('#server').textContent='Live: '+d.live+'\nFrame sequence: '+d.seq+'\nSource connection ID: '+d.connection_id+'\nAnalyzer frames/sec (last 50): '+d.recent_rate_hz+'\nLast frame interval: '+d.frame_interval_ms+' ms\nMax recent frame gap: '+d.max_recent_gap_ms+' ms\nGeneration time (Unix ms): '+d.generated_at_unix_ms+'\nFreshness at reply: '+d.sample_age_ms+' ms\nFFT window: '+d.audio_window_ms+' ms\nFFT hop: '+d.nominal_hop_ms+' ms\nSmoothing alpha: '+d.smoothing_alpha+'\nError: '+(d.error||'none');
+ $('#client').textContent='Elapsed test: '+((end-first)/1000).toFixed(1)+' s\nSuccessful replies: '+count+'\nFailed replies: '+fail+'\nDistinct sequence observations: '+changed+'\nIdentical sequences: '+dupes+'\nSkipped sequence IDs: '+skipped+'\nObserved distinct seq/sec: '+(changed/Math.max(1,(end-first)/1000)).toFixed(2)+'\nMean request RTT (last 50): '+(recent.reduce((a,b)=>a+b,0)/recent.length).toFixed(1)+' ms\nTime since latest reply: 0 ms\nLast error: '+lastError;
+}catch(e){fail++;lastError=String(e);$('#client').textContent='Connection unavailable: '+lastError+'\nSuccessful replies: '+count+'\nFailed replies: '+fail;}
+finally{busy=false;setTimeout(poll,0)} }
+poll();
+$('#copy').onclick=()=>{const s=$('#server').textContent+'\n\n'+$('#client').textContent;navigator.clipboard?.writeText(s).then(()=>$('#copy').textContent='Copied!',()=>prompt('Copy diagnostics:',s)).catch(()=>prompt('Copy diagnostics:',s));};
+</script></main></html>
